@@ -164,50 +164,50 @@ if uploaded_files:
                     "Select transformation type",
                     ['Log Transform', 'Standardization', 'Normalization']
                 )
-        
-                        # Let user choose columns
-                        if transform_method == 'Log Transform':
-                            # Log transform needs single column selection
-                            selected_cols = st.selectbox(
-                                "Select column for log transform",
-                                numeric_cols
-                            )
-                            selected_cols = [selected_cols]
-                        else:
-                            # For standardization/normalization allow multiple
-                            selected_cols = st.multiselect(
-                                "Select columns to transform",
-                                numeric_cols,
-                                default=numeric_cols
-                            )
-                
-                        if selected_cols:
-                            try:
-                                if transform_method == 'Log Transform':
-                                    df[selected_cols] = np.log1p(df[selected_cols])
-                                    st.success(f"Applied log transform to {selected_cols}")
-                
-                                elif transform_method == 'Standardization':
-                                    scaler = StandardScaler()
-                                    df[selected_cols] = scaler.fit_transform(df[selected_cols])
-                                    st.success(f"Standardized {selected_cols}")
-                
-                                elif transform_method == 'Normalization':
-                                    scaler = MinMaxScaler()
-                                    df[selected_cols] = scaler.fit_transform(df[selected_cols])
-                                    st.success(f"Normalized {selected_cols}")
-                
-                                st.session_state.df = df
-                                st.rerun()
-                
-                            except Exception as e:
-                                st.error(f"Transformation failed: {str(e)}")
-                                if "log" in transform_method.lower():
-                                    st.warning("Log transform requires positive values only")
-                    else:
-                        st.warning("No numeric columns available for transformation")
+
+                # Let user choose columns
+                if transform_method == 'Log Transform':
+                    # Log transform needs single column selection
+                    selected_cols = st.selectbox(
+                        "Select column for log transform",
+                        numeric_cols
+                    )
+                    selected_cols = [selected_cols]
                 else:
-                    st.warning("Upload data first to enable transformations")
+                    # For standardization/normalization allow multiple
+                    selected_cols = st.multiselect(
+                        "Select columns to transform",
+                        numeric_cols,
+                        default=numeric_cols
+                    )
+        
+                if selected_cols:
+                    try:
+                        if transform_method == 'Log Transform':
+                            df[selected_cols] = np.log1p(df[selected_cols])
+                            st.success(f"Applied log transform to {selected_cols}")
+        
+                        elif transform_method == 'Standardization':
+                            scaler = StandardScaler()
+                            df[selected_cols] = scaler.fit_transform(df[selected_cols])
+                            st.success(f"Standardized {selected_cols}")
+        
+                        elif transform_method == 'Normalization':
+                            scaler = MinMaxScaler()
+                            df[selected_cols] = scaler.fit_transform(df[selected_cols])
+                            st.success(f"Normalized {selected_cols}")
+        
+                        st.session_state.df = df
+                        st.rerun()
+        
+                    except Exception as e:
+                        st.error(f"Transformation failed: {str(e)}")
+                        if "log" in transform_method.lower():
+                            st.warning("Log transform requires positive values only")
+            else:
+                st.warning("No numeric columns available for transformation")
+        else:
+            st.warning("Upload data first to enable transformations")
         st.header("Export Data")
         if st.button("Download Cleaned Data"):
             csv = df.to_csv(index=False)
