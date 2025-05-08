@@ -112,30 +112,48 @@ if uploaded_files:
         
         st.header("Outlier Management")
         outlier_method = st.selectbox("Outlier detection method", ['Z-score', 'IQR'])
-        outliers = pd.Series(dtype=int)
         
-        if outlier_method == 'Z-score':
-            z_scores = np.abs(stats.zscore(df.select_dtypes(include=np.number)))
-            outliers = (z_scores > 3).sum(axis=0)
-        else:
-            Q1 = df.quantile(0.25)
-            Q3 = df.quantile(0.75)
-            IQR = Q3 - Q1
-            outliers = ((df < (Q1 - 1.5 * IQR)) | (df > (Q3 + 1.5 * IQR))).sum(axis=0)
-        
-        st.write("Outliers per column:")
-        st.write(outliers)
-        
-        action = st.selectbox("Outlier action", ['Keep', 'Remove', 'Cap'])
-        if action != 'Keep':
+        if df is not None:
+            # Work only with numeric columns
             numeric_cols = df.select_dtypes(include=np.number).columns
-            for col in numeric_cols:
+            outliers = pd.Series(dtype=int)
+        
+            if outlier_method == 'Z-score':
+                if not numeric_cols.empty:
+                    z_scores = np.abs(stats.zscore(df[numeric_cols]))
+                    outliers = (z_scores > 3).sum(axis=0)
+            else:
+                if not numeric_cols.empty:
+                    Q1 = df[numeric_cols].quantile(0.25)
+                    Q3 = df[numeric_cols].quantile(0.75)
+                    IQR = Q3 - Q1
+                    outliers = ((df[numeric_cols] < (Q1 - 1.5 * IQR)) | 
+                               (df[numeric_cols] > (Q3 + 1.5 * IQR))).sum(axis=0)
+        
+            st.write("Outliers per column (numeric columns only):")
+            st.write(outliers)
+        
+            action = st.selectbox("Outlier action", ['Keep', 'Remove', 'Cap'])
+            
+            if action != 'Keep' and not numeric_cols.empty:
                 if action == 'Remove':
-                    df = df[(np.abs(stats.zscore(df[col])) < 3)]
+                    # Remove outliers using Z-score method
+                    if outlier_method == 'Z-score':
+                        df = df[(z_scores < 3).all(axis=1)]
+                    # Remove outliers using IQR method
+                    else:
+                        mask = ~((df[numeric_cols] < (Q1 - 1.5 * IQR)) | 
+                                (df[numeric_cols] > (Q3 + 1.5 * IQR))).any(axis=1)
+                        df = df[mask]
                 else:
-                    lower = df[col].quantile(0.05)
-                    upper = df[col].quantile(0.95)
-                    df[col] = df[col].clip(lower, upper)
+                    # Cap outliers
+                    for col in numeric_cols:
+                        lower = df[col].quantile(0.05)
+                        upper = df[col].quantile(0.95)
+                        df[col] = df[col].clip(lower, upper)
+                
+                st.session_state.df = df
+                st.success("Outliers handled successfully!")
         
         st.header("Data Transformation")
         transform_method = st.selectbox("Select transformation", 
