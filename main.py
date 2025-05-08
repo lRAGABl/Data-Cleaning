@@ -159,16 +159,31 @@ if uploaded_files:
         transform_method = st.selectbox("Select transformation", 
                                       ['Log', 'Standardization', 'Normalization'])
         
-        if transform_method == 'Log':
-            num_col = st.selectbox("Select numeric column", df.select_dtypes(include=np.number).columns)
-            df[num_col] = np.log1p(df[num_col])
-        elif transform_method == 'Standardization':
-            scaler = StandardScaler()
-            df[df.select_dtypes(include=np.number).columns] = scaler.fit_transform(df.select_dtypes(include=np.number))
-        else:
-            scaler = MinMaxScaler()
-            df[df.select_dtypes(include=np.number).columns] = scaler.fit_transform(df.select_dtypes(include=np.number))
-        
+        if transform_method != 'Keep' and df is not None:
+            # Check for numeric columns
+            numeric_cols = df.select_dtypes(include=np.number).columns
+            
+            if not numeric_cols.empty:
+                try:
+                    if transform_method == 'Log':
+                        num_col = st.selectbox("Select numeric column", numeric_cols)
+                        df[num_col] = np.log1p(df[num_col])
+                        
+                    elif transform_method == 'Standardization':
+                        scaler = StandardScaler()
+                        df[numeric_cols] = scaler.fit_transform(df[numeric_cols])
+                        
+                    elif transform_method == 'Normalization':
+                        scaler = MinMaxScaler()
+                        df[numeric_cols] = scaler.fit_transform(df[numeric_cols])
+                        
+                    st.session_state.df = df
+                    st.success("Transformation applied successfully!")
+                    
+                except Exception as e:
+                    st.error(f"Transformation failed: {str(e)}")
+            else:
+                st.warning("No numeric columns available for transformation")
         st.header("Export Data")
         if st.button("Download Cleaned Data"):
             csv = df.to_csv(index=False)
