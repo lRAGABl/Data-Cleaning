@@ -16,20 +16,46 @@ if 'date_columns' not in st.session_state:
     st.session_state.date_columns = []
 
 def safe_convert_dtypes(df):
-    for col in df.columns:
-        if df[col].dtype == 'object':
-            df[col] = df[col].astype(str)
-        
+    """
+    Safely convert DataFrame columns to appropriate types
+    to avoid PyArrow serialization issues and SettingWithCopyWarning
+    """
+    # Create a deep copy to avoid SettingWithCopyWarning
+    df_copy = df.copy(deep=True)
+    
+    for col in df_copy.columns:
         try:
-            if df[col].dtype == 'float64':
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-            elif df[col].dtype == 'int64':
-                df[col] = pd.to_numeric(df[col], downcast='integer')
+            # Handle object (string) columns
+            if df_copy[col].dtype == 'object':
+                # Attempt to convert to numeric if possible
+                numeric_converted = pd.to_numeric(df_copy[col], errors='ignore')
+                
+                # If conversion was successful and different from original
+                if not numeric_converted.equals(df_copy[col]):
+                    # Use the numeric version if it's not all NaN
+                    if not numeric_converted.isna().all():
+                        df_copy.loc[:, col] = numeric_converted
+                    else:
+                        # If conversion results in all NaN, convert to string
+                        df_copy.loc[:, col] = df_copy[col].astype(str)
+                else:
+                    # Convert to string if no numeric conversion possible
+                    df_copy.loc[:, col] = df_copy[col].astype(str)
+            
+            # Handle float columns
+            elif df_copy[col].dtype == 'float64':
+                df_copy.loc[:, col] = pd.to_numeric(df_copy[col], errors='coerce', downcast='float')
+            
+            # Handle integer columns
+            elif df_copy[col].dtype == 'int64':
+                df_copy.loc[:, col] = pd.to_numeric(df_copy[col], errors='coerce', downcast='integer')
+        
         except Exception as e:
             st.warning(f"Could not convert column {col}: {str(e)}")
-            df[col] = df[col].astype(str)
+            # Fallback to string conversion
+            df_copy.loc[:, col] = df_copy[col].astype(str)
     
-    return df
+    return df_copy
 
 def load_data(uploaded_files):
     dfs = []
