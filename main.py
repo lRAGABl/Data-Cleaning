@@ -8,30 +8,18 @@ import io
 from datetime import datetime
 import pyarrow as pa
 
-# Existing code remains exactly the same as in previous submission
-# Full code is identical to the previous response
-
-# Do you want me to paste the entire code again, or do you have a specific concern about the previous implementation?
-
 st.set_page_config(layout="wide")
 
-# Initialize session state
 if 'df' not in st.session_state:
     st.session_state.df = None
 if 'date_columns' not in st.session_state:
     st.session_state.date_columns = []
 
 def safe_convert_dtypes(df):
-    """
-    Safely convert DataFrame columns to appropriate types
-    to avoid PyArrow serialization issues
-    """
     for col in df.columns:
-        # Convert object columns to string
         if df[col].dtype == 'object':
             df[col] = df[col].astype(str)
         
-        # Handle potential mixed type columns
         try:
             if df[col].dtype == 'float64':
                 df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -47,22 +35,19 @@ def load_data(uploaded_files):
     dfs = []
     for file in uploaded_files:
         try:
-            # Use safe type conversion during data loading
             if file.name.endswith('.csv'):
-                df = pd.read_csv(file, dtype=str)  # Initially read all as string
+                df = pd.read_csv(file, dtype=str)
             elif file.name.endswith(('.xls', '.xlsx')):
                 df = pd.read_excel(file)
             elif file.name.endswith('.json'):
                 df = pd.read_json(file)
             
-            # Apply safe type conversion
             df = safe_convert_dtypes(df)
             
             dfs.append(df)
         except Exception as e:
             st.error(f"Error loading {file.name}: {str(e)}")
     
-    # Combine or return single dataframe
     return pd.concat(dfs) if len(dfs) > 1 else dfs[0] if dfs else None
 
 def validate_date(date_str, format):
@@ -83,10 +68,8 @@ def main():
             st.session_state.df = load_data(uploaded_files)
         
         if st.session_state.df is not None:
-            # Ensure the dataframe is safely converted before further processing
             df = safe_convert_dtypes(st.session_state.df.copy())
             
-            # Date Validation Section
             st.header("📅 Date Validation")
             date_cols = st.multiselect("Select potential date columns", df.columns)
             
@@ -115,7 +98,6 @@ def main():
                     else:
                         st.success("All dates are valid!")
             
-            # Data Overview Section
             st.header("🔍 Data Overview")
             col1, col2 = st.columns(2)
             
@@ -133,12 +115,133 @@ def main():
             display_df = safe_convert_dtypes(df.head(20))
             st.dataframe(display_df)
 
-            # Rest of the code remains exactly the same as in previous implementations
-            # All sections like Column Management, Data Validation, 
-            # Duplicate Handling, Missing Values Management, 
-            # Outlier Management, Data Transformation, Export remain unchanged
+            st.header("📝 Column Management")
+            selected_col = st.selectbox("Select column to rename", df.columns)
+            new_name = st.text_input("New column name", selected_col)
+            if st.button("Rename Column"):
+                df.rename(columns={selected_col: new_name}, inplace=True)
+                st.session_state.df = df
+                st.rerun()
 
-            # Export Data section (as an example)
+            st.subheader("🔒 Data Validation")
+            validation_expr = st.text_input("Enter validation expression (e.g., `Age > 0 & Age < 120`)")
+            if validation_expr:
+                try:
+                    df = df.query(validation_expr)
+                    st.session_state.df = df
+                    st.success("Validation applied successfully!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error in validation: {str(e)}")
+            
+            st.header("♻️ Duplicate Handling")
+            duplicates = df.duplicated().sum()
+            st.write(f"Number of duplicates: {duplicates}")
+            if duplicates > 0 and st.checkbox("Remove duplicates?"):
+                df.drop_duplicates(inplace=True)
+                st.session_state.df = df
+                st.success("Duplicates removed!")
+                st.rerun()
+            
+            st.header("❓ Missing Values Management")
+            null_counts = df.isnull().sum()
+            st.write("Null values per column:")
+            st.write(null_counts)
+            
+            handling_method = st.selectbox("Missing value handling method", 
+                                          ['Delete', 'Mean', 'Median', 'Mode', 'KNN', 'Constant'])
+            
+            if handling_method == 'Delete':
+                df.dropna(inplace=True)
+            elif handling_method in ['Mean', 'Median', 'Mode']:
+                for col in df.select_dtypes(include=np.number).columns:
+                    if handling_method == 'Mean':
+                        df[col].fillna(df[col].mean(), inplace=True)
+                    elif handling_method == 'Median':
+                        df[col].fillna(df[col].median(), inplace=True)
+                    else:
+                        df[col].fillna(df[col].mode()[0], inplace=True)
+            elif handling_method == 'KNN':
+                k = st.number_input("Number of neighbors (k)", 3, 10, 5)
+                imputer = KNNImputer(n_neighbors=k)
+                df = pd.DataFrame(imputer.fit_transform(df), columns=df.columns)
+            else:
+                constant = st.text_input("Enter constant value")
+                df.fillna(constant, inplace=True)
+            
+            st.session_state.df = df
+            
+            st.header("📊 Outlier Management")
+            outlier_method = st.selectbox("Outlier detection method", ['Z-score', 'IQR'])
+            
+            numeric_cols = df.select_dtypes(include=np.number).columns
+            outliers = pd.Series(dtype=int)
+        
+            if outlier_method == 'Z-score' and not numeric_cols.empty:
+                z_scores = np.abs(stats.zscore(df[numeric_cols]))
+                outliers = (z_scores > 3).sum(axis=0)
+            elif not numeric_cols.empty:
+                Q1 = df[numeric_cols].quantile(0.25)
+                Q3 = df[numeric_cols].quantile(0.75)
+                IQR = Q3 - Q1
+                outliers = ((df[numeric_cols] < (Q1 - 1.5 * IQR)) | 
+                          (df[numeric_cols] > (Q3 + 1.5 * IQR))).sum(axis=0)
+            
+            if not numeric_cols.empty:
+                st.write("Outliers per column (numeric columns only):")
+                st.write(outliers)
+            
+                action = st.selectbox("Outlier action", ['Keep', 'Remove', 'Cap'])
+                
+                if action != 'Keep':
+                    if action == 'Remove':
+                        if outlier_method == 'Z-score':
+                            df = df[(z_scores < 3).all(axis=1)]
+                        else:
+                            mask = ~((df[numeric_cols] < (Q1 - 1.5 * IQR)) | 
+                                    (df[numeric_cols] > (Q3 + 1.5 * IQR))).any(axis=1)
+                            df = df[mask]
+                    else:
+                        for col in numeric_cols:
+                            lower = df[col].quantile(0.05)
+                            upper = df[col].quantile(0.95)
+                            df[col] = df[col].clip(lower, upper)
+                    
+                    st.session_state.df = df
+                    st.success("Outliers handled successfully!")
+                    st.rerun()
+            
+            st.header("🔄 Data Transformation")
+            numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
+            
+            if numeric_cols:
+                transform_method = st.selectbox(
+                    "Select transformation type",
+                    ['Log Transform', 'Standardization', 'Normalization']
+                )
+
+                if transform_method == 'Log Transform':
+                    selected_cols = [st.selectbox("Select column for log transform", numeric_cols)]
+                else:
+                    selected_cols = st.multiselect("Select columns to transform", numeric_cols, default=numeric_cols)
+        
+                if selected_cols:
+                    try:
+                        if transform_method == 'Log Transform':
+                            df[selected_cols] = np.log1p(df[selected_cols])
+                        elif transform_method == 'Standardization':
+                            scaler = StandardScaler()
+                            df[selected_cols] = scaler.fit_transform(df[selected_cols])
+                        else:
+                            scaler = MinMaxScaler()
+                            df[selected_cols] = scaler.fit_transform(df[selected_cols])
+                        
+                        st.session_state.df = df
+                        st.success(f"{transform_method} applied successfully!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Transformation failed: {str(e)}")
+            
             st.header("💾 Export Data")
             if st.button("Download Cleaned Data"):
                 if not df.empty:
