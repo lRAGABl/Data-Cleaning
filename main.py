@@ -202,9 +202,19 @@ if uploaded_files:
         else:
             st.warning("Upload data first to enable transformations")
         st.header("Export Data")
-        if st.button("Download Cleaned Data"):
-            csv = df.to_csv(index=False)
-            st.download_button("Download CSV", csv, "cleaned_data.csv")
-
+        if df is not None and not df.empty:
+            # Convert dataframe to CSV
+            csv = df.to_csv(index=False).encode('utf-8')
+            
+            # Create download button
+            st.download_button(
+                label="Download Cleaned Data as CSV",
+                data=csv,
+                file_name="cleaned_data.csv",
+                mime="text/csv",
+                key="download-csv"
+            )
+        else:
+            st.warning("No data available to download")
 else:
     st.info("Please upload data files to begin cleaning")
