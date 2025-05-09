@@ -51,13 +51,6 @@ if uploaded_files:
         
         st.subheader("First 20 Rows")
         st.dataframe(df.head(20))
-        
-        # Editable Data Table
-        st.header("Interactive Data Editor")
-        num_rows = st.slider("Select number of rows to display", 100, len(df), 100)
-        edited_df = st.data_editor(df.head(num_rows), num_rows="fixed", use_container_width=True)
-        df.update(edited_df)
-        st.session_state.df = df  # Update session state
 
         # Column Management
         st.header("Column Management")
