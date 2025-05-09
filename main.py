@@ -201,20 +201,21 @@ if uploaded_files:
                 st.warning("No numeric columns available for transformation")
         else:
             st.warning("Upload data first to enable transformations")
+        # Add this at the end of your code
         st.header("Export Data")
-        if df is not None and not df.empty:
-            # Convert dataframe to CSV
-            csv = df.to_csv(index=False).encode('utf-8')
+        if 'df' in st.session_state and not st.session_state.df.empty:
+            csv = st.session_state.df.to_csv(index=False).encode('utf-8')
             
-            # Create download button
             st.download_button(
-                label="Download Cleaned Data as CSV",
-                data=csv,
-                file_name="cleaned_data.csv",
-                mime="text/csv",
-                key="download-csv"
+                "Download Cleaned CSV",
+                csv,
+                "cleaned_data.csv",
+                "text/csv",
+                key='final-download'
             )
+        elif 'df' in st.session_state and st.session_state.df.empty:
+            st.error("Dataset is empty - cannot download!")
         else:
-            st.warning("No data available to download")
+            st.warning("No data processed yet - upload files first")
 else:
     st.info("Please upload data files to begin cleaning")
