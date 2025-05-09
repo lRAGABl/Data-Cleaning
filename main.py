@@ -18,7 +18,7 @@ if 'date_columns' not in st.session_state:
 def safe_convert_dtypes(df):
     """
     Safely convert DataFrame columns to appropriate types
-    to avoid PyArrow serialization issues and SettingWithCopyWarning
+    to avoid PyArrow serialization issues and deprecation warnings
     """
     # Create a deep copy to avoid SettingWithCopyWarning
     df_copy = df.copy(deep=True)
@@ -27,28 +27,33 @@ def safe_convert_dtypes(df):
         try:
             # Handle object (string) columns
             if df_copy[col].dtype == 'object':
-                # Attempt to convert to numeric if possible
-                numeric_converted = pd.to_numeric(df_copy[col], errors='ignore')
-                
-                # If conversion was successful and different from original
-                if not numeric_converted.equals(df_copy[col]):
-                    # Use the numeric version if it's not all NaN
+                try:
+                    # Try to convert to numeric, catching any conversion errors
+                    numeric_converted = pd.to_numeric(df_copy[col])
+                    
+                    # If conversion was successful and not all NaN
                     if not numeric_converted.isna().all():
                         df_copy.loc[:, col] = numeric_converted
                     else:
                         # If conversion results in all NaN, convert to string
                         df_copy.loc[:, col] = df_copy[col].astype(str)
-                else:
-                    # Convert to string if no numeric conversion possible
+                except (ValueError, TypeError):
+                    # If numeric conversion fails, convert to string
                     df_copy.loc[:, col] = df_copy[col].astype(str)
             
             # Handle float columns
             elif df_copy[col].dtype == 'float64':
-                df_copy.loc[:, col] = pd.to_numeric(df_copy[col], errors='coerce', downcast='float')
+                try:
+                    df_copy.loc[:, col] = pd.to_numeric(df_copy[col], downcast='float')
+                except (ValueError, TypeError):
+                    df_copy.loc[:, col] = df_copy[col].astype(str)
             
             # Handle integer columns
             elif df_copy[col].dtype == 'int64':
-                df_copy.loc[:, col] = pd.to_numeric(df_copy[col], errors='coerce', downcast='integer')
+                try:
+                    df_copy.loc[:, col] = pd.to_numeric(df_copy[col], downcast='integer')
+                except (ValueError, TypeError):
+                    df_copy.loc[:, col] = df_copy[col].astype(str)
         
         except Exception as e:
             st.warning(f"Could not convert column {col}: {str(e)}")
@@ -56,6 +61,28 @@ def safe_convert_dtypes(df):
             df_copy.loc[:, col] = df_copy[col].astype(str)
     
     return df_copy
+
+def load_data(uploaded_files):
+    dfs = []
+    for file in uploaded_files:
+        try:
+            # Use safe type conversion during data loading
+            if file.name.endswith('.csv'):
+                df = pd.read_csv(file)  # Remove dtype=str
+            elif file.name.endswith(('.xls', '.xlsx')):
+                df = pd.read_excel(file)
+            elif file.name.endswith('.json'):
+                df = pd.read_json(file)
+            
+            # Apply safe type conversion
+            df = safe_convert_dtypes(df)
+            
+            dfs.append(df)
+        except Exception as e:
+            st.error(f"Error loading {file.name}: {str(e)}")
+    
+    # Combine or return single dataframe
+    return pd.concat(dfs) if len(dfs) > 1 else dfs[0] if dfs else None
 
 def load_data(uploaded_files):
     dfs = []
