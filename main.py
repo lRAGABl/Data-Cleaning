@@ -1,107 +1,43 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import pyarrow as pa
+import io
 from sklearn.impute import KNNImputer
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from scipy import stats
-import io
 from datetime import datetime
-import pyarrow as pa
 
-st.set_page_config(layout="wide")
-
-if 'df' not in st.session_state:
-    st.session_state.df = None
-if 'date_columns' not in st.session_state:
-    st.session_state.date_columns = []
-
-def safe_convert_dtypes(df):
-    """
-    Safely convert DataFrame columns to appropriate types
-    to avoid PyArrow serialization issues and deprecation warnings
-    """
-    # Create a deep copy to avoid SettingWithCopyWarning
-    df_copy = df.copy(deep=True)
+def preprocess_dataframe(df):
+    df_processed = df.copy()
     
-    for col in df_copy.columns:
+    for col in df_processed.columns:
         try:
-            # Handle object (string) columns
-            if df_copy[col].dtype == 'object':
+            if df_processed[col].dtype == 'object':
                 try:
-                    # Try to convert to numeric, catching any conversion errors
-                    numeric_converted = pd.to_numeric(df_copy[col])
-                    
-                    # If conversion was successful and not all NaN
-                    if not numeric_converted.isna().all():
-                        df_copy.loc[:, col] = numeric_converted
+                    numeric_series = pd.to_numeric(df_processed[col], errors='coerce')
+                    if not numeric_series.isna().all():
+                        df_processed[col] = numeric_series
                     else:
-                        # If conversion results in all NaN, convert to string
-                        df_copy.loc[:, col] = df_copy[col].astype(str)
-                except (ValueError, TypeError):
-                    # If numeric conversion fails, convert to string
-                    df_copy.loc[:, col] = df_copy[col].astype(str)
+                        unique_count = df_processed[col].nunique()
+                        if unique_count < min(100, len(df_processed[col]) * 0.1):
+                            df_processed[col] = pd.Categorical(df_processed[col])
+                        else:
+                            df_processed[col] = df_processed[col].astype(str)
+                except Exception:
+                    df_processed[col] = df_processed[col].astype(str)
             
-            # Handle float columns
-            elif df_copy[col].dtype == 'float64':
-                try:
-                    df_copy.loc[:, col] = pd.to_numeric(df_copy[col], downcast='float')
-                except (ValueError, TypeError):
-                    df_copy.loc[:, col] = df_copy[col].astype(str)
-            
-            # Handle integer columns
-            elif df_copy[col].dtype == 'int64':
-                try:
-                    df_copy.loc[:, col] = pd.to_numeric(df_copy[col], downcast='integer')
-                except (ValueError, TypeError):
-                    df_copy.loc[:, col] = df_copy[col].astype(str)
+            elif pd.api.types.is_numeric_dtype(df_processed[col]):
+                if pd.api.types.is_float_dtype(df_processed[col]):
+                    df_processed[col] = pd.to_numeric(df_processed[col], downcast='float')
+                elif pd.api.types.is_integer_dtype(df_processed[col]):
+                    df_processed[col] = pd.to_numeric(df_processed[col], downcast='integer')
         
         except Exception as e:
-            st.warning(f"Could not convert column {col}: {str(e)}")
-            # Fallback to string conversion
-            df_copy.loc[:, col] = df_copy[col].astype(str)
+            st.warning(f"Could not process column {col}: {str(e)}")
+            df_processed[col] = df_processed[col].astype(str)
     
-    return df_copy
-
-def load_data(uploaded_files):
-    dfs = []
-    for file in uploaded_files:
-        try:
-            # Use safe type conversion during data loading
-            if file.name.endswith('.csv'):
-                df = pd.read_csv(file)  # Remove dtype=str
-            elif file.name.endswith(('.xls', '.xlsx')):
-                df = pd.read_excel(file)
-            elif file.name.endswith('.json'):
-                df = pd.read_json(file)
-            
-            # Apply safe type conversion
-            df = safe_convert_dtypes(df)
-            
-            dfs.append(df)
-        except Exception as e:
-            st.error(f"Error loading {file.name}: {str(e)}")
-    
-    # Combine or return single dataframe
-    return pd.concat(dfs) if len(dfs) > 1 else dfs[0] if dfs else None
-
-def load_data(uploaded_files):
-    dfs = []
-    for file in uploaded_files:
-        try:
-            if file.name.endswith('.csv'):
-                df = pd.read_csv(file, dtype=str)
-            elif file.name.endswith(('.xls', '.xlsx')):
-                df = pd.read_excel(file)
-            elif file.name.endswith('.json'):
-                df = pd.read_json(file)
-            
-            df = safe_convert_dtypes(df)
-            
-            dfs.append(df)
-        except Exception as e:
-            st.error(f"Error loading {file.name}: {str(e)}")
-    
-    return pd.concat(dfs) if len(dfs) > 1 else dfs[0] if dfs else None
+    return df_processed
 
 def validate_date(date_str, format):
     try:
@@ -110,7 +46,31 @@ def validate_date(date_str, format):
     except ValueError:
         return False
 
+def load_data(uploaded_files):
+    dfs = []
+    for file in uploaded_files:
+        try:
+            if file.name.endswith('.csv'):
+                df = pd.read_csv(file, low_memory=False)
+            elif file.name.endswith(('.xls', '.xlsx')):
+                df = pd.read_excel(file)
+            elif file.name.endswith('.json'):
+                df = pd.read_json(file)
+            
+            df = preprocess_dataframe(df)
+            
+            dfs.append(df)
+        except Exception as e:
+            st.error(f"Error loading {file.name}: {str(e)}")
+    
+    return pd.concat(dfs) if len(dfs) > 1 else dfs[0] if dfs else None
+
 def main():
+    st.set_page_config(layout="wide")
+
+    if 'df' not in st.session_state:
+        st.session_state.df = None
+
     st.sidebar.header("Data Upload")
     uploaded_files = st.sidebar.file_uploader("Upload datasets", 
                                             accept_multiple_files=True, 
@@ -121,7 +81,7 @@ def main():
             st.session_state.df = load_data(uploaded_files)
         
         if st.session_state.df is not None:
-            df = safe_convert_dtypes(st.session_state.df.copy())
+            df = preprocess_dataframe(st.session_state.df.copy())
             
             st.header("📅 Date Validation")
             date_cols = st.multiselect("Select potential date columns", df.columns)
@@ -165,8 +125,7 @@ def main():
                 st.write(df.describe(include='all'))
             
             st.subheader("First 20 Rows")
-            display_df = safe_convert_dtypes(df.head(20))
-            st.dataframe(display_df)
+            st.dataframe(df.head(20))
 
             st.header("📝 Column Management")
             selected_col = st.selectbox("Select column to rename", df.columns)
@@ -298,7 +257,7 @@ def main():
             st.header("💾 Export Data")
             if st.button("Download Cleaned Data"):
                 if not df.empty:
-                    export_df = safe_convert_dtypes(df)
+                    export_df = preprocess_dataframe(df)
                     csv = export_df.to_csv(index=False).encode('utf-8')
                     st.download_button(
                         label="Download CSV",
