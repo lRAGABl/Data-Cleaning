@@ -10,35 +10,27 @@ from datetime import datetime
 
 def preprocess_dataframe(df):
     df_processed = df.copy()
-    
     for col in df_processed.columns:
         try:
             if df_processed[col].dtype == 'object':
-                try:
-                    numeric_series = pd.to_numeric(df_processed[col], errors='coerce')
-                    if not numeric_series.isna().all():
-                        df_processed[col] = numeric_series
-                    else:
-                        unique_count = df_processed[col].nunique()
-                        if unique_count < min(100, len(df_processed[col]) * 0.1):
-                            df_processed[col] = pd.Categorical(df_processed[col])
-                        else:
-                            df_processed[col] = df_processed[col].astype(str)
-                except Exception:
+                numeric_series = pd.to_numeric(df_processed[col], errors='coerce')
+                if not numeric_series.isna().all():
+                    df_processed[col] = numeric_series
+                else:
+                    # Always use string for non-numeric object columns
                     df_processed[col] = df_processed[col].astype(str)
-            
             elif pd.api.types.is_numeric_dtype(df_processed[col]):
                 if pd.api.types.is_float_dtype(df_processed[col]):
                     df_processed[col] = pd.to_numeric(df_processed[col], downcast='float')
                 elif pd.api.types.is_integer_dtype(df_processed[col]):
                     df_processed[col] = pd.to_numeric(df_processed[col], downcast='integer')
-        
+            # If categorical, also convert to string
+            elif pd.api.types.is_categorical_dtype(df_processed[col]):
+                df_processed[col] = df_processed[col].astype(str)
         except Exception as e:
             st.warning(f"Could not process column {col}: {str(e)}")
             df_processed[col] = df_processed[col].astype(str)
-    
     return df_processed
-
 def validate_date(date_str, format):
     try:
         datetime.strptime(str(date_str), format)
