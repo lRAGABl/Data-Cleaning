@@ -129,25 +129,36 @@ with st.expander('Describe Data'):
 st.write(f"**Number of Rows:** {df.shape[0]}")
 st.write(f"**Number of Columns:** {df.shape[1]}")
 
-# --- Rename columns ---
-st.subheader('Column Operations')
-col_to_rename = st.selectbox('Choose column to rename:', df.columns)
-new_col_name = st.text_input('New name:', value=col_to_rename)
-if st.button('Rename Column!'):
-    df = rename_column(df, col_to_rename, new_col_name)
-    st.session_state['df'] = df
-    st.success(f"Renamed {col_to_rename} to {new_col_name}")
-    st.experimental_rerun()
+# --- Rename Columns ---
+st.subheader('Rename Columns')
+if df.shape[1] > 0:
+    col_to_rename = st.selectbox('Choose column to rename:', df.columns.tolist(), key='rename_selectbox')
+    new_col_name = st.text_input('New column name:', value=col_to_rename, key='rename_input')
+    if st.button('Rename Column', key='rename_button'):
+        if new_col_name in df.columns:
+            st.warning("A column with that name already exists.")
+        elif not new_col_name.strip():
+            st.warning("Column name cannot be empty.")
+        else:
+            df = df.rename(columns={col_to_rename: new_col_name})
+            st.session_state['df'] = df
+            st.success(f"Renamed '{col_to_rename}' to '{new_col_name}' successfully!")
+            st.experimental_rerun()
+else:
+    st.info("No columns available to rename.")
 
 # --- Delete Columns ---
 st.subheader('Delete Columns')
 if df.shape[1] > 0:
-    cols_to_drop = st.multiselect('Select columns to delete:', df.columns.tolist())
-    if cols_to_drop and st.button('Delete Selected Columns'):
-        df = df.drop(columns=cols_to_drop)
-        st.session_state['df'] = df
-        st.success("Selected column(s) deleted successfully!")  # or detail if you prefer
-        st.experimental_rerun()
+    cols_to_drop = st.multiselect('Select columns to delete:', df.columns.tolist(), key='delete_multiselect')
+    if st.button('Delete Selected Columns', key='delete_button'):
+        if cols_to_drop:
+            df = df.drop(columns=cols_to_drop)
+            st.session_state['df'] = df
+            st.success("Selected column(s) deleted successfully!")
+            st.experimental_rerun()
+        else:
+            st.warning("Please select at least one column to delete.")
 else:
     st.info('No columns available to delete.')
 # --- Replace values globally in a column ---
