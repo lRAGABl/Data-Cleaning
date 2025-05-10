@@ -17,20 +17,27 @@ def preprocess_dataframe(df):
                 if not numeric_series.isna().all():
                     df_processed[col] = numeric_series
                 else:
-                    # Always use string for non-numeric object columns
                     df_processed[col] = df_processed[col].astype(str)
             elif pd.api.types.is_numeric_dtype(df_processed[col]):
                 if pd.api.types.is_float_dtype(df_processed[col]):
                     df_processed[col] = pd.to_numeric(df_processed[col], downcast='float')
                 elif pd.api.types.is_integer_dtype(df_processed[col]):
                     df_processed[col] = pd.to_numeric(df_processed[col], downcast='integer')
-            # If categorical, also convert to string
             elif pd.api.types.is_categorical_dtype(df_processed[col]):
                 df_processed[col] = df_processed[col].astype(str)
         except Exception as e:
             st.warning(f"Could not process column {col}: {str(e)}")
             df_processed[col] = df_processed[col].astype(str)
     return df_processed
+
+def make_arrow_compatible(df):
+    # Casts any object/categorical columns to string to prevent arrow errors
+    df_arrow = df.copy()
+    for col in df_arrow.columns:
+        if df_arrow[col].dtype == 'object' or pd.api.types.is_categorical_dtype(df_arrow[col]):
+            df_arrow[col] = df_arrow[col].astype(str)
+    return df_arrow
+
 def validate_date(date_str, format):
     try:
         datetime.strptime(str(date_str), format)
@@ -48,13 +55,10 @@ def load_data(uploaded_files):
                 df = pd.read_excel(file)
             elif file.name.endswith('.json'):
                 df = pd.read_json(file)
-            
-            df = preprocess_dataframe(df)
-            
+            df = preprocess_dataframe(df)  # ensure it's clean even before combining
             dfs.append(df)
         except Exception as e:
             st.error(f"Error loading {file.name}: {str(e)}")
-    
     return pd.concat(dfs) if len(dfs) > 1 else dfs[0] if dfs else None
 
 def main():
@@ -64,20 +68,22 @@ def main():
         st.session_state.df = None
 
     st.sidebar.header("Data Upload")
-    uploaded_files = st.sidebar.file_uploader("Upload datasets", 
-                                            accept_multiple_files=True, 
-                                            type=['csv', 'xlsx', 'json'])
-    
+    uploaded_files = st.sidebar.file_uploader(
+        "Upload datasets",
+        accept_multiple_files=True,
+        type=['csv', 'xlsx', 'json']
+    )
+
     if uploaded_files:
         if st.session_state.df is None:
             st.session_state.df = load_data(uploaded_files)
-        
+
         if st.session_state.df is not None:
             df = preprocess_dataframe(st.session_state.df.copy())
-            
+
             st.header("📅 Date Validation")
             date_cols = st.multiselect("Select potential date columns", df.columns)
-            
+
             if date_cols:
                 date_format = st.text_input("Enter expected date format (e.g., %Y-%m-%d)")
                 if date_format:
@@ -85,12 +91,13 @@ def main():
                     for col in date_cols:
                         invalid = df[col].apply(lambda x: not validate_date(str(x), date_format) if pd.notnull(x) else True)
                         invalid_dates[col] = df[col][invalid].index.tolist()
-                    
+
                     if any(invalid_dates.values()):
                         st.error("Invalid dates found:")
                         for col, indices in invalid_dates.items():
                             if indices:
-                                st.write(f"Column '{col}': {len(indices)} invalid dates at rows {indices[:10]}{'...' if len(indices)>10 else ''}")
+                                st.write(
+                                    f"Column '{col}': {len(indices)} invalid dates at rows {indices[:10]}{'...' if len(indices) > 10 else ''}")
                         if st.button("Convert to proper datetime format"):
                             try:
                                 for col in date_cols:
@@ -102,22 +109,22 @@ def main():
                                 st.error(f"Date conversion failed: {str(e)}")
                     else:
                         st.success("All dates are valid!")
-            
+
             st.header("🔍 Data Overview")
             col1, col2 = st.columns(2)
-            
+
             with col1:
                 st.subheader("Dataset Info")
                 buffer = io.StringIO()
                 df.info(buf=buffer)
                 st.text(buffer.getvalue())
-                
+
             with col2:
                 st.subheader("Basic Statistics")
                 st.write(df.describe(include='all'))
-            
+
             st.subheader("First 20 Rows")
-            st.dataframe(df.head(20))
+            st.dataframe(make_arrow_compatible(df.head(20)))
 
             st.header("📝 Column Management")
             selected_col = st.selectbox("Select column to rename", df.columns)
@@ -137,7 +144,7 @@ def main():
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error in validation: {str(e)}")
-            
+
             st.header("♻️ Duplicate Handling")
             duplicates = df.duplicated().sum()
             st.write(f"Number of duplicates: {duplicates}")
@@ -146,15 +153,15 @@ def main():
                 st.session_state.df = df
                 st.success("Duplicates removed!")
                 st.rerun()
-            
+
             st.header("❓ Missing Values Management")
             null_counts = df.isnull().sum()
             st.write("Null values per column:")
             st.write(null_counts)
-            
-            handling_method = st.selectbox("Missing value handling method", 
-                                          ['Delete', 'Mean', 'Median', 'Mode', 'KNN', 'Constant'])
-            
+
+            handling_method = st.selectbox("Missing value handling method",
+                                           ['Delete', 'Mean', 'Median', 'Mode', 'KNN', 'Constant'])
+
             if handling_method == 'Delete':
                 df.dropna(inplace=True)
             elif handling_method in ['Mean', 'Median', 'Mode']:
@@ -172,15 +179,15 @@ def main():
             else:
                 constant = st.text_input("Enter constant value")
                 df.fillna(constant, inplace=True)
-            
+
             st.session_state.df = df
-            
+
             st.header("📊 Outlier Management")
             outlier_method = st.selectbox("Outlier detection method", ['Z-score', 'IQR'])
-            
+
             numeric_cols = df.select_dtypes(include=np.number).columns
             outliers = pd.Series(dtype=int)
-        
+
             if outlier_method == 'Z-score' and not numeric_cols.empty:
                 z_scores = np.abs(stats.zscore(df[numeric_cols]))
                 outliers = (z_scores > 3).sum(axis=0)
@@ -188,36 +195,36 @@ def main():
                 Q1 = df[numeric_cols].quantile(0.25)
                 Q3 = df[numeric_cols].quantile(0.75)
                 IQR = Q3 - Q1
-                outliers = ((df[numeric_cols] < (Q1 - 1.5 * IQR)) | 
-                          (df[numeric_cols] > (Q3 + 1.5 * IQR))).sum(axis=0)
-            
+                outliers = ((df[numeric_cols] < (Q1 - 1.5 * IQR)) |
+                            (df[numeric_cols] > (Q3 + 1.5 * IQR))).sum(axis=0)
+
             if not numeric_cols.empty:
                 st.write("Outliers per column (numeric columns only):")
                 st.write(outliers)
-            
+
                 action = st.selectbox("Outlier action", ['Keep', 'Remove', 'Cap'])
-                
+
                 if action != 'Keep':
                     if action == 'Remove':
                         if outlier_method == 'Z-score':
                             df = df[(z_scores < 3).all(axis=1)]
                         else:
-                            mask = ~((df[numeric_cols] < (Q1 - 1.5 * IQR)) | 
-                                    (df[numeric_cols] > (Q3 + 1.5 * IQR))).any(axis=1)
+                            mask = ~((df[numeric_cols] < (Q1 - 1.5 * IQR)) |
+                                     (df[numeric_cols] > (Q3 + 1.5 * IQR))).any(axis=1)
                             df = df[mask]
-                    else:
+                    else:  # Cap
                         for col in numeric_cols:
                             lower = df[col].quantile(0.05)
                             upper = df[col].quantile(0.95)
                             df[col] = df[col].clip(lower, upper)
-                    
+
                     st.session_state.df = df
                     st.success("Outliers handled successfully!")
                     st.rerun()
-            
+
             st.header("🔄 Data Transformation")
             numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
-            
+
             if numeric_cols:
                 transform_method = st.selectbox(
                     "Select transformation type",
@@ -228,7 +235,7 @@ def main():
                     selected_cols = [st.selectbox("Select column for log transform", numeric_cols)]
                 else:
                     selected_cols = st.multiselect("Select columns to transform", numeric_cols, default=numeric_cols)
-        
+
                 if selected_cols:
                     try:
                         if transform_method == 'Log Transform':
@@ -239,17 +246,18 @@ def main():
                         else:
                             scaler = MinMaxScaler()
                             df[selected_cols] = scaler.fit_transform(df[selected_cols])
-                        
+
                         st.session_state.df = df
                         st.success(f"{transform_method} applied successfully!")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Transformation failed: {str(e)}")
-            
+
             st.header("💾 Export Data")
             if st.button("Download Cleaned Data"):
                 if not df.empty:
                     export_df = preprocess_dataframe(df)
+                    export_df = make_arrow_compatible(export_df)
                     csv = export_df.to_csv(index=False).encode('utf-8')
                     st.download_button(
                         label="Download CSV",
