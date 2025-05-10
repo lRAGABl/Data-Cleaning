@@ -8,12 +8,25 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from scipy import stats
 from datetime import datetime
 
+def force_str_cols(df):
+    result = df.copy()
+    for col in result.columns:
+        # Only allow numeric, bool, datetime types untouched
+        if not (pd.api.types.is_numeric_dtype(result[col]) 
+                or pd.api.types.is_bool_dtype(result[col]) 
+                or pd.api.types.is_datetime64_any_dtype(result[col])):
+            result[col] = result[col].astype(str)
+    return result
+
 def preprocess_dataframe(df):
     df_processed = df.copy()
     for col in df_processed.columns:
         try:
-            if df_processed[col].dtype == 'object':
+            if isinstance(df_processed[col].dtype, pd.CategoricalDtype):
+                df_processed[col] = df_processed[col].astype(str)
+            elif df_processed[col].dtype == 'object':
                 numeric_series = pd.to_numeric(df_processed[col], errors='coerce')
+                # Only convert if some values really are numeric
                 if not numeric_series.isna().all():
                     df_processed[col] = numeric_series
                 else:
@@ -23,20 +36,10 @@ def preprocess_dataframe(df):
                     df_processed[col] = pd.to_numeric(df_processed[col], downcast='float')
                 elif pd.api.types.is_integer_dtype(df_processed[col]):
                     df_processed[col] = pd.to_numeric(df_processed[col], downcast='integer')
-            elif pd.api.types.is_categorical_dtype(df_processed[col]):
-                df_processed[col] = df_processed[col].astype(str)
         except Exception as e:
             st.warning(f"Could not process column {col}: {str(e)}")
             df_processed[col] = df_processed[col].astype(str)
     return df_processed
-
-def make_arrow_compatible(df):
-    # Casts any object/categorical columns to string to prevent arrow errors
-    df_arrow = df.copy()
-    for col in df_arrow.columns:
-        if df_arrow[col].dtype == 'object' or pd.api.types.is_categorical_dtype(df_arrow[col]):
-            df_arrow[col] = df_arrow[col].astype(str)
-    return df_arrow
 
 def validate_date(date_str, format):
     try:
@@ -55,7 +58,7 @@ def load_data(uploaded_files):
                 df = pd.read_excel(file)
             elif file.name.endswith('.json'):
                 df = pd.read_json(file)
-            df = preprocess_dataframe(df)  # ensure it's clean even before combining
+            df = preprocess_dataframe(df)
             dfs.append(df)
         except Exception as e:
             st.error(f"Error loading {file.name}: {str(e)}")
@@ -121,10 +124,10 @@ def main():
 
             with col2:
                 st.subheader("Basic Statistics")
-                st.write(df.describe(include='all'))
+                st.write(force_str_cols(df.describe(include='all')))
 
             st.subheader("First 20 Rows")
-            st.dataframe(make_arrow_compatible(df.head(20)))
+            st.dataframe(force_str_cols(df.head(20)))
 
             st.header("📝 Column Management")
             selected_col = st.selectbox("Select column to rename", df.columns)
@@ -200,7 +203,7 @@ def main():
 
             if not numeric_cols.empty:
                 st.write("Outliers per column (numeric columns only):")
-                st.write(outliers)
+                st.write(force_str_cols(outliers))
 
                 action = st.selectbox("Outlier action", ['Keep', 'Remove', 'Cap'])
 
@@ -257,7 +260,7 @@ def main():
             if st.button("Download Cleaned Data"):
                 if not df.empty:
                     export_df = preprocess_dataframe(df)
-                    export_df = make_arrow_compatible(export_df)
+                    export_df = force_str_cols(export_df)
                     csv = export_df.to_csv(index=False).encode('utf-8')
                     st.download_button(
                         label="Download CSV",
