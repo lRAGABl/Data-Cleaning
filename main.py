@@ -1,281 +1,333 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import pyarrow as pa
-import io
+from io import StringIO
 from sklearn.impute import KNNImputer
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from scipy import stats
+from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder, OneHotEncoder
+from st_aggrid import GridOptionsBuilder, AgGrid, DataReturnMode, GridUpdateMode, JsCode
 from datetime import datetime
+from dateutil.parser import parse
+import json
 
-def force_str_cols(df):
-    result = df.copy()
-    for col in result.columns:
-        # Check dtype categories more precisely
-        if not (pd.api.types.is_numeric_dtype(result[col]) 
-                or pd.api.types.is_bool_dtype(result[col])
-                or pd.api.types.is_datetime64_any_dtype(result[col])
-                or pd.api.types.is_string_dtype(result[col])  # Preserve existing strings
-                or isinstance(result[col].dtype, pd.CategoricalDtype)):
-            result[col] = result[col].astype('string')  # Use pandas' nullable string type
-    return result
+# ============ Helper functions =============
 
-def preprocess_dataframe(df):
-    df_processed = df.copy()
-    for col in df_processed.columns:
+def load_file(uploaded_file):
+    if uploaded_file is not None:
+        filename = uploaded_file.name
+        if filename.endswith('.csv'):
+            return pd.read_csv(uploaded_file)
+        elif filename.endswith('.xlsx') or filename.endswith('.xls'):
+            return pd.read_excel(uploaded_file)
+        elif filename.endswith('.json'):
+            content = uploaded_file.read()
+            decoded = content.decode('utf-8')
+            json_data = json.loads(decoded)
+            return pd.json_normalize(json_data)
+        else:
+            st.error('Unsupported file format.')
+            return None
+    return None
+
+def detect_dates(df):
+    date_cols = []
+    for col in df.columns:
         try:
-            if isinstance(df_processed[col].dtype, pd.CategoricalDtype):
-                df_processed[col] = df_processed[col].astype(str)
-            elif df_processed[col].dtype == 'object':
-                numeric_series = pd.to_numeric(df_processed[col], errors='coerce')
-                # Only convert if some values really are numeric
-                if not numeric_series.isna().all():
-                    df_processed[col] = numeric_series
-                else:
-                    df_processed[col] = df_processed[col].astype(str)
-            elif pd.api.types.is_numeric_dtype(df_processed[col]):
-                if pd.api.types.is_float_dtype(df_processed[col]):
-                    df_processed[col] = pd.to_numeric(df_processed[col], downcast='float')
-                elif pd.api.types.is_integer_dtype(df_processed[col]):
-                    df_processed[col] = pd.to_numeric(df_processed[col], downcast='integer')
-        except Exception as e:
-            st.warning(f"Could not process column {col}: {str(e)}")
-            df_processed[col] = df_processed[col].astype(str)
-    return df_processed
+            pd.to_datetime(df[col])
+            date_cols.append(col)
+        except:
+            pass
+    return date_cols
 
-def validate_date(date_str, format):
+def outlier_detection(df, col):
+    if not np.issubdtype(df[col].dtype, np.number):
+        return []
+    Q1 = df[col].quantile(0.25)
+    Q3 = df[col].quantile(0.75)
+    IQR = Q3 - Q1
+    lower = Q1 - 1.5 * IQR
+    upper = Q3 + 1.5 * IQR
+    outliers = df[(df[col] < lower) | (df[col] > upper)].index.tolist()
+    return outliers
+
+def replace_in_column(df, column, old_val, new_val):
+    df[column] = df[column].replace(old_val, new_val)
+    return df
+
+def column_range_validation(df, col, min_val, max_val):
+    df = df[(df[col] >= min_val) & (df[col] <= max_val)]
+    return df
+
+def rename_column(df, old, new):
+    df = df.rename(columns={old: new})
+    return df
+
+def fix_dates(df, col, date_format):
     try:
-        datetime.strptime(str(date_str), format)
-        return True
-    except ValueError:
-        return False
+        df[col] = pd.to_datetime(df[col], format=date_format, errors='coerce')
+    except:
+        st.warning(f"Could not convert {col} using format {date_format}")
+    return df
 
-def load_data(uploaded_files):
+def cap_outliers(df, col):
+    Q1 = df[col].quantile(0.25)
+    Q3 = df[col].quantile(0.75)
+    IQR = Q3 - Q1
+    lower = Q1 - 1.5 * IQR
+    upper = Q3 + 1.5 * IQR
+    df[col] = np.where(df[col] < lower, lower,
+                       np.where(df[col] > upper, upper, df[col]))
+    return df
+
+def encode_features(df, col, method):
+    if method == 'Label Encoding':
+        le = LabelEncoder()
+        df[col] = le.fit_transform(df[col].astype(str))
+    elif method == 'OneHot Encoding':
+        df = pd.get_dummies(df, columns=[col])
+    return df
+
+# ============ Main Streamlit App =============
+
+st.title('🧹 Advanced Data Cleaning Playground')
+
+uploaded_files = st.file_uploader("Upload your file(s) (CSV, Excel, or JSON)", type=['csv', 'xlsx', 'xls', 'json'], accept_multiple_files=True)
+if uploaded_files:
     dfs = []
-    for file in uploaded_files:
-        try:
-            if file.name.endswith('.csv'):
-                df = pd.read_csv(file, low_memory=False)
-            elif file.name.endswith(('.xls', '.xlsx')):
-                df = pd.read_excel(file)
-            elif file.name.endswith('.json'):
-                df = pd.read_json(file)
-            df = preprocess_dataframe(df)
-            dfs.append(df)
-        except Exception as e:
-            st.error(f"Error loading {file.name}: {str(e)}")
-    return pd.concat(dfs) if len(dfs) > 1 else dfs[0] if dfs else None
-
-def main():
-    st.set_page_config(layout="wide")
-
-    if 'df' not in st.session_state:
-        st.session_state.df = None
-
-    st.sidebar.header("Data Upload")
-    uploaded_files = st.sidebar.file_uploader(
-        "Upload datasets",
-        accept_multiple_files=True,
-        type=['csv', 'xlsx', 'json']
-    )
-
-    if uploaded_files:
-        if st.session_state.df is None:
-            st.session_state.df = load_data(uploaded_files)
-
-        if st.session_state.df is not None:
-            df = preprocess_dataframe(st.session_state.df.copy())
-
-            st.header("📅 Date Validation")
-            date_cols = st.multiselect("Select potential date columns", df.columns)
-
-            if date_cols:
-                date_format = st.text_input("Enter expected date format (e.g., %Y-%m-%d)")
-                if date_format:
-                    invalid_dates = {}
-                    for col in date_cols:
-                        invalid = df[col].apply(lambda x: not validate_date(str(x), date_format) if pd.notnull(x) else True)
-                        invalid_dates[col] = df[col][invalid].index.tolist()
-
-                    if any(invalid_dates.values()):
-                        st.error("Invalid dates found:")
-                        for col, indices in invalid_dates.items():
-                            if indices:
-                                st.write(
-                                    f"Column '{col}': {len(indices)} invalid dates at rows {indices[:10]}{'...' if len(indices) > 10 else ''}")
-                        if st.button("Convert to proper datetime format"):
-                            try:
-                                for col in date_cols:
-                                    df[col] = pd.to_datetime(df[col], errors='coerce', format=date_format)
-                                st.session_state.df = df
-                                st.success("Date conversion completed!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Date conversion failed: {str(e)}")
-                    else:
-                        st.success("All dates are valid!")
-
-            st.header("🔍 Data Overview")
-            col1, col2 = st.columns(2)
-
-            with col1:
-                st.subheader("Dataset Info")
-                buffer = io.StringIO()
-                df.info(buf=buffer)
-                st.text(buffer.getvalue())
-
-            with col2:
-                st.subheader("Basic Statistics")
-                st.write(force_str_cols(df.describe(include='all')))
-
-            st.subheader("First 20 Rows")
-            st.dataframe(force_str_cols(df.head(20)))
-
-            st.header("📝 Column Management")
-            selected_col = st.selectbox("Select column to rename", df.columns)
-            new_name = st.text_input("New column name", selected_col)
-            if st.button("Rename Column"):
-                df.rename(columns={selected_col: new_name}, inplace=True)
-                st.session_state.df = df
-                st.rerun()
-
-            st.subheader("🔒 Data Validation")
-            validation_expr = st.text_input("Enter validation expression (e.g., `Age > 0 & Age < 120`)")
-            if validation_expr:
-                try:
-                    df = df.query(validation_expr)
-                    st.session_state.df = df
-                    st.success("Validation applied successfully!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error in validation: {str(e)}")
-
-            st.header("♻️ Duplicate Handling")
-            duplicates = df.duplicated().sum()
-            st.write(f"Number of duplicates: {duplicates}")
-            if duplicates > 0 and st.checkbox("Remove duplicates?"):
-                df.drop_duplicates(inplace=True)
-                st.session_state.df = df
-                st.success("Duplicates removed!")
-                st.rerun()
-
-            st.header("❓ Missing Values Management")
-            null_counts = df.isnull().sum()
-            st.write("Null values per column:")
-            st.write(null_counts)
-
-            handling_method = st.selectbox("Missing value handling method",
-                                           ['Delete', 'Mean', 'Median', 'Mode', 'KNN', 'Constant'])
-
-            if handling_method == 'Delete':
-                df.dropna(inplace=True)
-            elif handling_method in ['Mean', 'Median', 'Mode']:
-                for col in df.select_dtypes(include=np.number).columns:
-                    if handling_method == 'Mean':
-                        df[col].fillna(df[col].mean(), inplace=True)
-                    elif handling_method == 'Median':
-                        df[col].fillna(df[col].median(), inplace=True)
-                    else:
-                        df[col].fillna(df[col].mode()[0], inplace=True)
-            elif handling_method == 'KNN':
-                k = st.number_input("Number of neighbors (k)", 3, 10, 5)
-                imputer = KNNImputer(n_neighbors=k)
-                df = pd.DataFrame(imputer.fit_transform(df), columns=df.columns)
-            else:
-                constant = st.text_input("Enter constant value")
-                df.fillna(constant, inplace=True)
-
-            st.session_state.df = df
-
-            st.header("📊 Outlier Management")
-            outlier_method = st.selectbox("Outlier detection method", ['Z-score', 'IQR'])
-
-            numeric_cols = df.select_dtypes(include=np.number).columns
-            outliers = pd.Series(dtype=int)
-
-            if outlier_method == 'Z-score' and not numeric_cols.empty:
-                z_scores = np.abs(stats.zscore(df[numeric_cols]))
-                outliers = (z_scores > 3).sum(axis=0)
-            elif not numeric_cols.empty:
-                Q1 = df[numeric_cols].quantile(0.25)
-                Q3 = df[numeric_cols].quantile(0.75)
-                IQR = Q3 - Q1
-                outliers = ((df[numeric_cols] < (Q1 - 1.5 * IQR)) |
-                            (df[numeric_cols] > (Q3 + 1.5 * IQR))).sum(axis=0)
-            
-            if not numeric_cols.empty:
-                st.write("Outliers per column (numeric columns only):")
-                st.write(outliers)
-
-                action = st.selectbox("Outlier action", ['Keep', 'Remove', 'Cap'])
-                # ... rest of outlier handling code remains the same
-
-                if action != 'Keep':
-                    if action == 'Remove':
-                        if outlier_method == 'Z-score':
-                            df = df[(z_scores < 3).all(axis=1)]
-                        else:
-                            mask = ~((df[numeric_cols] < (Q1 - 1.5 * IQR)) |
-                                     (df[numeric_cols] > (Q3 + 1.5 * IQR))).any(axis=1)
-                            df = df[mask]
-                    else:  # Cap
-                        for col in numeric_cols:
-                            lower = df[col].quantile(0.05)
-                            upper = df[col].quantile(0.95)
-                            df[col] = df[col].clip(lower, upper)
-
-                    st.session_state.df = df
-                    st.success("Outliers handled successfully!")
-                    st.rerun()
-
-            st.header("🔄 Data Transformation")
-            numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
-
-            if numeric_cols:
-                transform_method = st.selectbox(
-                    "Select transformation type",
-                    ['Log Transform', 'Standardization', 'Normalization']
-                )
-
-                if transform_method == 'Log Transform':
-                    selected_cols = [st.selectbox("Select column for log transform", numeric_cols)]
-                else:
-                    selected_cols = st.multiselect("Select columns to transform", numeric_cols, default=numeric_cols)
-
-                if selected_cols:
-                    try:
-                        if transform_method == 'Log Transform':
-                            df[selected_cols] = np.log1p(df[selected_cols])
-                        elif transform_method == 'Standardization':
-                            scaler = StandardScaler()
-                            df[selected_cols] = scaler.fit_transform(df[selected_cols])
-                        else:
-                            scaler = MinMaxScaler()
-                            df[selected_cols] = scaler.fit_transform(df[selected_cols])
-
-                        st.session_state.df = df
-                        st.success(f"{transform_method} applied successfully!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Transformation failed: {str(e)}")
-
-            st.header("💾 Export Data")
-            if st.button("Download Cleaned Data"):
-                if not df.empty:
-                    export_df = preprocess_dataframe(df)
-                    export_df = force_str_cols(export_df)
-                    csv = export_df.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="Download CSV",
-                        data=csv,
-                        file_name="cleaned_data.csv",
-                        mime="text/csv",
-                    )
-                else:
-                    st.error("Cannot download empty dataset!")
-
+    if len(uploaded_files) == 1:
+        df = load_file(uploaded_files[0])
+        dfs.append(df)
     else:
-        st.info("Please upload data files to begin cleaning")
+        for uploaded_file in uploaded_files:
+            dfi = load_file(uploaded_file)
+            dfs.append(dfi)
+        # Option: merge/join files or keep separate
+        if st.checkbox('Concatenate all files (vertically, same columns required)?'):
+            df = pd.concat(dfs)
+        else:
+            df_selector = st.selectbox('Select dataset to work on:', [f.name for f in uploaded_files])
+            idx = [f.name for f in uploaded_files].index(df_selector)
+            df = dfs[idx]
+    # Store df in session so edits persist
+    if 'df' not in st.session_state or st.session_state['df'].equals(df) == False:
+        st.session_state['df'] = df.copy()
+else:
+    st.info('Please upload your dataset(s).')
+    st.stop()
 
-if __name__ == "__main__":
-    main()
+df = st.session_state['df']
+
+# --- Info ---
+st.subheader('Dataset Overview')
+st.write('**Shape:**', df.shape)
+st.write('**Columns:**', list(df.columns))
+st.write('**Data types:**')
+st.write(df.dtypes.astype(str))
+st.write('**head(20):**')
+st.write(df.head(20))
+with st.expander('Describe Data'):
+    st.write(df.describe(include='all').T)
+st.write(f"**Number of Rows:** {df.shape[0]}")
+st.write(f"**Number of Columns:** {df.shape[1]}")
+
+# --- Show Editable Table ---
+st.subheader('Editable Data Table')
+num_rows = st.slider('Number of rows to show:', 10, min(5000, df.shape[0]), 100)
+editable = st.checkbox('Enable Inline Editing?', value=True)
+# Use AgGrid for better interactive editing and features
+gb = GridOptionsBuilder.from_dataframe(df.iloc[:num_rows])
+gb.configure_pagination(enabled=True)
+gb.configure_default_column(editable=editable)
+gb.configure_side_bar()
+grid_options = gb.build()
+
+grid_resp = AgGrid(df.iloc[:num_rows],
+                   gridOptions=grid_options,
+                   data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
+                   update_mode=GridUpdateMode.MANUAL if editable else GridUpdateMode.NO_UPDATE,
+                   fit_columns_on_grid_load=True,
+                   enable_enterprise_modules=False,
+                   height=(min(num_rows,20) + 2) * 35,
+                   key='agrid1'
+                  )
+edited_df_part = grid_resp['data']
+
+if editable:
+    # Update changes in session df (for the visible part)
+    df_update_idx = edited_df_part.index
+    for i in df_update_idx:
+        st.session_state['df'].loc[i] = edited_df_part.loc[i]
+    df = st.session_state['df']
+
+if st.button('Show all data (may be slow for big tables)'):
+    AgGrid(df, fit_columns_on_grid_load=True, height=min(500, df.shape[0]*30))
+
+# --- Rename columns ---
+st.subheader('Column Operations')
+col_to_rename = st.selectbox('Choose column to rename:', df.columns)
+new_col_name = st.text_input('New name:', value=col_to_rename)
+if st.button('Rename Column!'):
+    df = rename_column(df, col_to_rename, new_col_name)
+    st.session_state['df'] = df
+    st.success(f"Renamed {col_to_rename} to {new_col_name}")
+    st.experimental_rerun()
+
+# --- Replace values globally in a column ---
+st.markdown("**Replace all occurrences of a value in a column**")
+col_for_replace = st.selectbox("Column for value replacement:", df.columns)
+unique_vals = df[col_for_replace].unique()
+old_val = st.selectbox('Old value to replace:', unique_vals)
+new_val = st.text_input('Replacement:', value=str(old_val))
+if st.button('Replace value globally'):
+    df = replace_in_column(df, col_for_replace, old_val, new_val)
+    st.session_state['df'] = df
+    st.success(f"Replaced all {old_val} in {col_for_replace} with {new_val}")
+
+# --- Column Range Validation ---
+st.subheader('Validate Numeric Ranges')
+num_cols = [c for c in df.columns if np.issubdtype(df[c].dtype, np.number)]
+if num_cols:
+    col_to_validate = st.selectbox('Select numeric column for range validation:', num_cols)
+    col_min, col_max = float(df[col_to_validate].min()), float(df[col_to_validate].max())
+    vmin = st.number_input('Min valid value:', value=col_min)
+    vmax = st.number_input('Max valid value:', value=col_max)
+    if st.button('Apply Range Validation'):
+        before = df.shape[0]
+        df = column_range_validation(df, col_to_validate, vmin, vmax)
+        after = df.shape[0]
+        st.session_state['df'] = df
+        st.success(f"Filtered out {before-after} rows outside ({vmin}, {vmax})")
+
+# --- Duplicate Handling ---
+st.subheader('Duplicate Detection')
+d_count = df.duplicated().sum()
+st.write(f"Number of duplicate rows: {d_count}")
+if d_count > 0 and st.button('Remove all duplicate rows'):
+    df = df.drop_duplicates()
+    st.session_state['df'] = df
+    st.success('Removed duplicate rows!')
+
+# --- Missing Value Handling ---
+st.subheader('Missing Value Analysis and Handling')
+null_stats = df.isnull().sum()
+st.write(f"Null counts per column: {null_stats}")
+null_rows = df.isnull().any(axis=1).sum()
+st.write(f"Rows with at least one missing value: {null_rows}")
+if null_rows > 0:
+    mv_col = st.selectbox("Select column for missing value handling:", df.columns[df.isnull().any()])
+    mv_choice = st.radio("How to handle missing values in this column?", [
+        "Delete rows with missing",
+        "Fill with mean",
+        "Fill with mode",
+        "Fill with median",
+        "KNN Imputer",
+        "Fill with constant"
+    ])
+    if mv_choice == "Delete rows with missing":
+        df = df[df[mv_col].notnull()]
+        st.session_state['df'] = df
+        st.success('Removed rows with missing!')
+    elif mv_choice == "Fill with mean":
+        df[mv_col] = df[mv_col].fillna(df[mv_col].mean())
+        st.session_state['df'] = df
+        st.success(f"Filled NAs with mean ({df[mv_col].mean()})")
+    elif mv_choice == "Fill with mode":
+        df[mv_col] = df[mv_col].fillna(df[mv_col].mode()[0])
+        st.session_state['df'] = df
+        st.success(f"Filled NAs with mode ({df[mv_col].mode()[0]})")
+    elif mv_choice == "Fill with median":
+        df[mv_col] = df[mv_col].fillna(df[mv_col].median())
+        st.session_state['df'] = df
+        st.success(f"Filled NAs with median ({df[mv_col].median()})")
+    elif mv_choice == "KNN Imputer":
+        k = st.number_input('Set K for KNN:', 1, 20, 3)
+        imputer = KNNImputer(n_neighbors=k)
+        df[num_cols] = imputer.fit_transform(df[num_cols])
+        st.session_state['df'] = df
+        st.success(f"Imputed numeric columns with KNN (k={k})")
+    elif mv_choice == "Fill with constant":
+        const_val = st.text_input('Constant value:', value="0")
+        if st.button('Fill with constant!'):
+            df[mv_col] = df[mv_col].fillna(const_val)
+            st.session_state['df'] = df
+            st.success(f"Filled NAs with: {const_val}")
+
+# --- Date Validation ---
+st.subheader('Date Handling / Validation')
+potential_dates = detect_dates(df)
+if potential_dates:
+    col_date = st.selectbox('Pick column to validate as date:', potential_dates)
+    st.write(f"Sample values: {df[col_date].iloc[:5].tolist()}")
+    date_format = st.text_input('Date format (optional, e.g., %Y-%m-%d):', value='')
+    if st.button('Try date conversion'):
+        before = df[col_date].isna().sum()
+        df = fix_dates(df, col_date, date_format if date_format else None)
+        after = df[col_date].isna().sum()
+        st.session_state['df'] = df
+        st.success(f"Converted. Nulls before: {before}, Nulls after: {after}")
+else:
+    st.info('No obvious date columns detected.')
+
+# --- Outlier Detection and Handling ---
+st.subheader('Outlier Detection & Handling')
+if num_cols:
+    outlier_info = {}
+    for col in num_cols:
+        outlier_info[col] = outlier_detection(df, col)
+    outlier_count = sum(len(ids) for ids in outlier_info.values())
+    st.write('Outliers per column:')
+    for col in outlier_info:
+        st.write(f"{col}: {len(outlier_info[col])}")
+    st.write(f"Total outliers: {outlier_count}")
+    if outlier_count > 0:
+        col_out = st.selectbox("Select column to handle outliers:", num_cols)
+        action = st.radio('Outlier handling method:', ['Keep', 'Delete', 'Cap'])
+        if action == 'Delete':
+            idxs = outlier_info[col_out]
+            before = df.shape[0]
+            df = df.drop(index=idxs)
+            st.session_state['df'] = df
+            st.success(f"Deleted {before - df.shape[0]} rows")
+        elif action == 'Cap':
+            df = cap_outliers(df, col_out)
+            st.session_state['df'] = df
+            st.success(f"Capped outliers in {col_out}")
+
+# --- Normalization / Transformation ---
+st.subheader('Data Normalization/Transformer')
+if num_cols:
+    norm_col = st.selectbox('Select column to normalize:', num_cols)
+    n_method = st.selectbox('Scaler type:', ['MinMaxScaler', 'StandardScaler', 'RobustScaler'])
+    if st.button('Apply normalization'):
+        scaler = {'MinMaxScaler': MinMaxScaler(), 'StandardScaler': StandardScaler(), 'RobustScaler': RobustScaler()}[n_method]
+        df[[norm_col]] = scaler.fit_transform(df[[norm_col]])
+        st.session_state['df'] = df
+        st.success(f"{norm_col} normalized with {n_method}")
+
+# --- Feature Engineering (simple demo) ---
+st.subheader('Feature Engineering')
+option = st.selectbox('Choose:', ['None', 'Polynomial Feature', 'Encode Categorical'])
+if option == 'Polynomial Feature' and num_cols:
+    col_poly = st.selectbox('Select numeric column:', num_cols)
+    degree = st.slider('Degree:', 2, 5, 2)
+    for d in range(2, degree+1):
+        df[f'{col_poly}^{d}'] = df[col_poly] ** d
+    st.session_state['df'] = df
+    st.success(f"Added degrees up to {degree} for {col_poly}")
+elif option == 'Encode Categorical':
+    cat_cols = [c for c in df.columns if df[c].dtype == 'object']
+    if cat_cols:
+        col_enc = st.selectbox('Select categorical column:', cat_cols)
+        enc_method = st.selectbox('Encoding:', ['Label Encoding', 'OneHot Encoding'])
+        df = encode_features(df, col_enc, enc_method)
+        st.session_state['df'] = df
+        st.success(f"{col_enc} encoded by {enc_method}")
+    else:
+        st.info("No object-type columns available for encoding.")
+
+# --- End ---
+with st.expander('Download Cleaned Dataframe'):
+    buf = StringIO()
+    df.to_csv(buf, index=False)
+    st.download_button("Download as CSV", data=buf.getvalue(), file_name="cleaned_data.csv", mime="text/csv")
+
+st.info('All edits are live on the dataframe in session. Re-download to capture the latest changes.')
