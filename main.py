@@ -11,11 +11,13 @@ from datetime import datetime
 def force_str_cols(df):
     result = df.copy()
     for col in result.columns:
-        # Only allow numeric, bool, datetime types untouched
+        # Check dtype categories more precisely
         if not (pd.api.types.is_numeric_dtype(result[col]) 
-                or pd.api.types.is_bool_dtype(result[col]) 
-                or pd.api.types.is_datetime64_any_dtype(result[col])):
-            result[col] = result[col].astype(str)
+                or pd.api.types.is_bool_dtype(result[col])
+                or pd.api.types.is_datetime64_any_dtype(result[col])
+                or pd.api.types.is_string_dtype(result[col])  # Preserve existing strings
+                or isinstance(result[col].dtype, pd.CategoricalDtype)):
+            result[col] = result[col].astype('string')  # Use pandas' nullable string type
     return result
 
 def preprocess_dataframe(df):
