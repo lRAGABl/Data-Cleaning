@@ -8,15 +8,32 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from scipy import stats
 from datetime import datetime
 
-def force_str_cols(df):
-    result = df.copy()
-    for col in result.columns:
-        # Only allow numeric, bool, datetime types untouched
-        if not (pd.api.types.is_numeric_dtype(result[col]) 
-                or pd.api.types.is_bool_dtype(result[col]) 
-                or pd.api.types.is_datetime64_any_dtype(result[col])):
-            result[col] = result[col].astype(str)
-    return result
+def force_str_cols(data):
+    # Handle pandas Series
+    if isinstance(data, pd.Series):
+        if not (pd.api.types.is_numeric_dtype(data) 
+                or pd.api.types.is_bool_dtype(data)
+                or pd.api.types.is_datetime64_any_dtype(data)):
+            return data.astype(str)
+        return data
+        
+    # Handle numpy arrays
+    elif isinstance(data, np.ndarray):
+        return pd.DataFrame(data).astype(str) if data.dtype == object else data
+        
+    # Handle pandas DataFrames (original logic)
+    elif isinstance(data, pd.DataFrame):
+        result = data.copy()
+        for col in result.columns:
+            if not (pd.api.types.is_numeric_dtype(result[col]) 
+                    or pd.api.types.is_bool_dtype(result[col]) 
+                    or pd.api.types.is_datetime64_any_dtype(result[col])):
+                result[col] = result[col].astype(str)
+        return result
+        
+    # Just return other types as-is
+    else:
+        return data
 
 def preprocess_dataframe(df):
     df_processed = df.copy()
@@ -203,7 +220,7 @@ def main():
 
             if not numeric_cols.empty:
                 st.write("Outliers per column (numeric columns only):")
-                st.write(force_str_cols(outliers))
+                st.write(force_str_cols(outliers))  # Now works with Series too
 
                 action = st.selectbox("Outlier action", ['Keep', 'Remove', 'Cap'])
 
