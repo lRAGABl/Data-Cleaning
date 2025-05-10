@@ -129,28 +129,6 @@ with st.expander('Describe Data'):
 st.write(f"**Number of Rows:** {df.shape[0]}")
 st.write(f"**Number of Columns:** {df.shape[1]}")
 
-# --- Show Editable Table ---
-st.subheader('Editable Data Table')
-num_rows = st.slider('Number of rows to show:', 10, min(5000, df.shape[0]), 100)
-editable = st.checkbox('Enable Inline Editing?', value=True)
-# Use AgGrid for better interactive editing and features
-gb = GridOptionsBuilder.from_dataframe(df.iloc[:num_rows])
-gb.configure_pagination(enabled=True)
-gb.configure_default_column(editable=editable)
-gb.configure_side_bar()
-grid_options = gb.build()
-
-grid_resp = AgGrid(df.iloc[:num_rows],
-                   gridOptions=grid_options,
-                   data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
-                   update_mode=GridUpdateMode.MANUAL if editable else GridUpdateMode.NO_UPDATE,
-                   fit_columns_on_grid_load=True,
-                   enable_enterprise_modules=False,
-                   height=(min(num_rows,20) + 2) * 35,
-                   key='agrid1'
-                  )
-edited_df_part = grid_resp['data']
-
 if editable:
     # Update changes in session df (for the visible part)
     df_update_idx = edited_df_part.index
