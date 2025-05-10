@@ -206,50 +206,61 @@ if d_count > 0 and st.button('Remove all duplicate rows'):
     st.session_state['df'] = df
     st.success('Removed duplicate rows!')
 
-# --- Missing Value Handling ---
+# --- Missing Value Handling (Batch) ---
 st.subheader('Missing Value Analysis and Handling')
 null_stats = df.isnull().sum()
 st.write(f"Null counts per column: {null_stats}")
 null_rows = df.isnull().any(axis=1).sum()
 st.write(f"Rows with at least one missing value: {null_rows}")
-if null_rows > 0:
-    mv_col = st.selectbox("Select column for missing value handling:", df.columns[df.isnull().any()])
-    mv_choice = st.radio("How to handle missing values in this column?", [
-        "Delete rows with missing",
-        "Fill with mean",
-        "Fill with mode",
-        "Fill with median",
-        "KNN Imputer",
+
+missing_cols = [col for col in df.columns if df[col].isnull().any()]
+if missing_cols:
+    batch_mv_cols = st.multiselect("Select columns to handle missing values (batch):", missing_cols, default=missing_cols)
+    mv_choice = st.radio("Strategy for these columns:", [
+        "Delete rows with missing (any selected column)",
+        "Fill with mean (numeric)",
+        "Fill with mode (numeric or categorical)",
+        "Fill with median (numeric)",
+        "KNN Imputer (numeric only)",
         "Fill with constant"
     ])
-    if mv_choice == "Delete rows with missing":
-        df = df[df[mv_col].notnull()]
+    if mv_choice == "Fill with constant":
+        const_val = st.text_input('Constant value to fill:', value="0")
+    if st.button('Apply Missing Value Handling to Selected Columns'):
+        if mv_choice == "Delete rows with missing (any selected column)":
+            before = df.shape[0]
+            df = df.dropna(subset=batch_mv_cols)
+            st.success(f"Removed {before - df.shape[0]} rows with missing in selected columns!")
+        elif mv_choice == "Fill with mean (numeric)":
+            for c in batch_mv_cols:
+                if pd.api.types.is_numeric_dtype(df[c]):
+                    df[c] = df[c].fillna(df[c].mean())
+            st.success("Filled NAs with mean for selected columns.")
+        elif mv_choice == "Fill with mode (numeric or categorical)":
+            for c in batch_mv_cols:
+                df[c] = df[c].fillna(df[c].mode()[0])
+            st.success("Filled NAs with mode for selected columns.")
+        elif mv_choice == "Fill with median (numeric)":
+            for c in batch_mv_cols:
+                if pd.api.types.is_numeric_dtype(df[c]):
+                    df[c] = df[c].fillna(df[c].median())
+            st.success("Filled NAs with median for selected columns.")
+        elif mv_choice == "KNN Imputer (numeric only)":
+            numeric_batch = [c for c in batch_mv_cols if pd.api.types.is_numeric_dtype(df[c])]
+            if numeric_batch:
+                k = st.number_input('Set K for KNN:', 1, 20, 3)
+                imputer = KNNImputer(n_neighbors=int(k))
+                df[numeric_batch] = imputer.fit_transform(df[numeric_batch])
+                st.success(f"KNN-imputed selected numeric columns (k={k}).")
+            else:
+                st.warning("No numeric columns selected for KNN.")
+        elif mv_choice == "Fill with constant":
+            for c in batch_mv_cols:
+                df[c] = df[c].fillna(const_val)
+            st.success(f"Filled NAs with constant '{const_val}' for selected columns.")
         st.session_state['df'] = df
-        st.success('Removed rows with missing!')
-    elif mv_choice == "Fill with mean":
-        df[mv_col] = df[mv_col].fillna(df[mv_col].mean())
-        st.session_state['df'] = df
-        st.success(f"Filled NAs with mean ({df[mv_col].mean()})")
-    elif mv_choice == "Fill with mode":
-        df[mv_col] = df[mv_col].fillna(df[mv_col].mode()[0])
-        st.session_state['df'] = df
-        st.success(f"Filled NAs with mode ({df[mv_col].mode()[0]})")
-    elif mv_choice == "Fill with median":
-        df[mv_col] = df[mv_col].fillna(df[mv_col].median())
-        st.session_state['df'] = df
-        st.success(f"Filled NAs with median ({df[mv_col].median()})")
-    elif mv_choice == "KNN Imputer":
-        k = st.number_input('Set K for KNN:', 1, 20, 3)
-        imputer = KNNImputer(n_neighbors=k)
-        df[num_cols] = imputer.fit_transform(df[num_cols])
-        st.session_state['df'] = df
-        st.success(f"Imputed numeric columns with KNN (k={k})")
-    elif mv_choice == "Fill with constant":
-        const_val = st.text_input('Constant value:', value="0")
-        if st.button('Fill with constant!'):
-            df[mv_col] = df[mv_col].fillna(const_val)
-            st.session_state['df'] = df
-            st.success(f"Filled NAs with: {const_val}")
+else:
+    st.success("No columns have missing values.")
 
 # --- Date Validation ---
 st.subheader('Date Handling / Validation')
@@ -267,30 +278,37 @@ if potential_dates:
 else:
     st.info('No obvious date columns detected.')
 
-# --- Outlier Detection and Handling ---
+# --- Outlier Detection and Handling (Batch) ---
 st.subheader('Outlier Detection & Handling')
 if num_cols:
-    outlier_info = {}
-    for col in num_cols:
-        outlier_info[col] = outlier_detection(df, col)
-    outlier_count = sum(len(ids) for ids in outlier_info.values())
+    outlier_info = {col: outlier_detection(df, col) for col in num_cols}
     st.write('Outliers per column:')
     for col in outlier_info:
         st.write(f"{col}: {len(outlier_info[col])}")
-    st.write(f"Total outliers: {outlier_count}")
-    if outlier_count > 0:
-        col_out = st.selectbox("Select column to handle outliers:", num_cols)
-        action = st.radio('Outlier handling method:', ['Keep', 'Delete', 'Cap'])
-        if action == 'Delete':
-            idxs = outlier_info[col_out]
+    total_outliers = sum(len(v) for v in outlier_info.values())
+    st.write(f"Total outliers: {total_outliers}")
+
+    batch_outlier_cols = st.multiselect("Select numeric columns to handle outliers (batch):", num_cols)
+    out_action = st.radio('How to handle outliers in selected columns?', ['Keep', 'Delete', 'Cap'])
+    if st.button('Apply Outlier Handling to Selected Columns'):
+        if not batch_outlier_cols:
+            st.warning("Please select at least one column.")
+        elif out_action == 'Delete':
+            # Delete any row with outlier in any selected col
+            idxs_to_del = []
+            for col in batch_outlier_cols:
+                idxs_to_del.extend(outlier_info[col])
+            idxs_to_del = list(set(idxs_to_del))
             before = df.shape[0]
-            df = df.drop(index=idxs)
-            st.session_state['df'] = df
-            st.success(f"Deleted {before - df.shape[0]} rows")
-        elif action == 'Cap':
-            df = cap_outliers(df, col_out)
-            st.session_state['df'] = df
-            st.success(f"Capped outliers in {col_out}")
+            df = df.drop(index=idxs_to_del)
+            st.success(f"Deleted {before - df.shape[0]} rows with outliers in selected columns.")
+        elif out_action == 'Cap':
+            for col in batch_outlier_cols:
+                df = cap_outliers(df, col)
+            st.success(f"Capped outliers in selected columns.")
+        elif out_action == 'Keep':
+            st.info("No changes made. Outliers kept.")
+        st.session_state['df'] = df
 
 # --- Normalization / Transformation ---
 st.subheader('Data Normalization/Transformer')
