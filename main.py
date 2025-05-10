@@ -139,6 +139,18 @@ if st.button('Rename Column!'):
     st.success(f"Renamed {col_to_rename} to {new_col_name}")
     st.experimental_rerun()
 
+# --- Delete Columns ---
+st.subheader('Delete Columns')
+if df.shape[1] > 0:
+    cols_to_drop = st.multiselect('Select columns to delete:', df.columns.tolist())
+    if cols_to_drop and st.button('Delete Selected Columns'):
+        df = df.drop(columns=cols_to_drop)
+        st.session_state['df'] = df
+        st.success(f"Deleted columns: {', '.join(cols_to_drop)}")
+        st.experimental_rerun()
+else:
+    st.info('No columns available to delete.')
+
 # --- Replace values globally in a column ---
 st.markdown("**Replace all occurrences of a value in a column**")
 col_for_replace = st.selectbox("Column for value replacement:", df.columns)
