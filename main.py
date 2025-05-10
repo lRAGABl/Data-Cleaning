@@ -129,16 +129,6 @@ with st.expander('Describe Data'):
 st.write(f"**Number of Rows:** {df.shape[0]}")
 st.write(f"**Number of Columns:** {df.shape[1]}")
 
-if editable:
-    # Update changes in session df (for the visible part)
-    df_update_idx = edited_df_part.index
-    for i in df_update_idx:
-        st.session_state['df'].loc[i] = edited_df_part.loc[i]
-    df = st.session_state['df']
-
-if st.button('Show all data (may be slow for big tables)'):
-    AgGrid(df, fit_columns_on_grid_load=True, height=min(500, df.shape[0]*30))
-
 # --- Rename columns ---
 st.subheader('Column Operations')
 col_to_rename = st.selectbox('Choose column to rename:', df.columns)
