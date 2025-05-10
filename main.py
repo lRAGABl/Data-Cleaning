@@ -202,10 +202,13 @@ def main():
                             (df[numeric_cols] > (Q3 + 1.5 * IQR))).sum(axis=0)
 
             if not numeric_cols.empty:
+                # Convert to DataFrame and display
+                outliers_df = outliers.to_frame(name='Outlier Count')
                 st.write("Outliers per column (numeric columns only):")
-                st.write(force_str_cols(outliers))
+                st.write(force_str_cols(outliers_df))
 
                 action = st.selectbox("Outlier action", ['Keep', 'Remove', 'Cap'])
+                # ... rest of outlier handling code remains the same
 
                 if action != 'Keep':
                     if action == 'Remove':
