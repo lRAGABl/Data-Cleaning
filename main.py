@@ -146,11 +146,10 @@ if df.shape[1] > 0:
     if cols_to_drop and st.button('Delete Selected Columns'):
         df = df.drop(columns=cols_to_drop)
         st.session_state['df'] = df
-        st.success(f"Deleted columns: {', '.join(cols_to_drop)}")
+        st.success("Selected column(s) deleted successfully!")  # or detail if you prefer
         st.experimental_rerun()
 else:
     st.info('No columns available to delete.')
-
 # --- Replace values globally in a column ---
 st.markdown("**Replace all occurrences of a value in a column**")
 col_for_replace = st.selectbox("Column for value replacement:", df.columns)
