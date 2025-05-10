@@ -4,7 +4,7 @@ import numpy as np
 from io import StringIO
 from sklearn.impute import KNNImputer
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, LabelEncoder, OneHotEncoder
-from st_aggrid import GridOptionsBuilder, AgGrid, DataReturnMode, GridUpdateMode, JsCode
+from st_aggrid import GridOptionsBuilder, AgGrid, DataReturnMode, GridUpdateMode
 from datetime import datetime
 from dateutil.parser import parse
 import json
@@ -34,7 +34,7 @@ def detect_dates(df):
         try:
             pd.to_datetime(df[col])
             date_cols.append(col)
-        except:
+        except Exception:
             pass
     return date_cols
 
@@ -54,18 +54,16 @@ def replace_in_column(df, column, old_val, new_val):
     return df
 
 def column_range_validation(df, col, min_val, max_val):
-    df = df[(df[col] >= min_val) & (df[col] <= max_val)]
-    return df
+    return df[(df[col] >= min_val) & (df[col] <= max_val)]
 
-def rename_column(df, old, new):
-    df = df.rename(columns={old: new})
-    return df
-
-def fix_dates(df, col, date_format):
+def fix_dates(df, col, date_format=None):
     try:
-        df[col] = pd.to_datetime(df[col], format=date_format, errors='coerce')
-    except:
-        st.warning(f"Could not convert {col} using format {date_format}")
+        if date_format:
+            df[col] = pd.to_datetime(df[col], format=date_format, errors='coerce')
+        else:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
+    except Exception:
+        st.warning(f"Could not convert {col} using format {date_format or 'auto'}")
     return df
 
 def cap_outliers(df, col):
@@ -88,9 +86,15 @@ def encode_features(df, col, method):
 
 # ============ Main Streamlit App =============
 
+st.set_page_config(layout="wide")
 st.title('🧹 Advanced Data Cleaning Playground')
 
-uploaded_files = st.file_uploader("Upload your file(s) (CSV, Excel, or JSON)", type=['csv', 'xlsx', 'xls', 'json'], accept_multiple_files=True)
+uploaded_files = st.file_uploader(
+    "Upload your file(s) (CSV, Excel, or JSON)", 
+    type=['csv', 'xlsx', 'xls', 'json'], 
+    accept_multiple_files=True
+)
+
 if uploaded_files:
     dfs = []
     if len(uploaded_files) == 1:
@@ -100,16 +104,15 @@ if uploaded_files:
         for uploaded_file in uploaded_files:
             dfi = load_file(uploaded_file)
             dfs.append(dfi)
-        # Option: merge/join files or keep separate
         if st.checkbox('Concatenate all files (vertically, same columns required)?'):
-            df = pd.concat(dfs)
+            df = pd.concat(dfs, ignore_index=True)
         else:
             df_selector = st.selectbox('Select dataset to work on:', [f.name for f in uploaded_files])
             idx = [f.name for f in uploaded_files].index(df_selector)
             df = dfs[idx]
-    # Store df in session so edits persist
-    if 'df' not in st.session_state or st.session_state['df'].equals(df) == False:
+    if df is not None and (('df' not in st.session_state) or (not st.session_state.get('df_initialized', False)) or not df.equals(st.session_state['df'])):
         st.session_state['df'] = df.copy()
+        st.session_state['df_initialized'] = True
 else:
     st.info('Please upload your dataset(s).')
     st.stop()
@@ -121,13 +124,43 @@ st.subheader('Dataset Overview')
 st.write('**Shape:**', df.shape)
 st.write('**Columns:**', list(df.columns))
 st.write('**Data types:**')
-st.write(df.dtypes.astype(str))
-st.write('**head(20):**')
-st.write(df.head(20))
-with st.expander('Describe Data'):
-    st.write(df.describe(include='all').T)
+st.write(pd.DataFrame(df.dtypes, columns=["dtype"]))
+if df.shape[0] > 0:
+    st.write('**head(20):**')
+    st.write(df.head(20))
+    with st.expander('Describe Data'):
+        st.write(df.describe(include='all').T)
 st.write(f"**Number of Rows:** {df.shape[0]}")
 st.write(f"**Number of Columns:** {df.shape[1]}")
+
+# --- Editable Table (Sample) ---
+st.subheader('Editable Data Table')
+max_to_show = min(100, df.shape[0])
+num_rows = st.number_input('Number of rows to show (up to 2000):', 1, min(2000, df.shape[0]), max_to_show)
+editable = st.checkbox('Enable Inline Editing?', value=False)
+if df.shape[0] > 0:
+    gb = GridOptionsBuilder.from_dataframe(df.iloc[:num_rows])
+    gb.configure_pagination(enabled=True)
+    gb.configure_default_column(editable=editable)
+    grid_options = gb.build()
+    grid_resp = AgGrid(
+        df.iloc[:num_rows],
+        gridOptions=grid_options,
+        data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
+        update_mode=(GridUpdateMode.MANUAL if editable else GridUpdateMode.NO_UPDATE),
+        fit_columns_on_grid_load=True,
+        enable_enterprise_modules=False,
+        height=(min(num_rows,20) + 4) * 35,
+        key='agrid1'
+    )
+    if editable:
+        edited_df_part = grid_resp['data']
+        df_update_idx = edited_df_part.index
+        for i in df_update_idx:
+            st.session_state['df'].loc[i] = edited_df_part.loc[i]
+        df = st.session_state['df']
+    if st.button('Show all data (use with caution for large datasets)'):
+        AgGrid(df, fit_columns_on_grid_load=True, height=min(500, df.shape[0]*30))
 
 # --- Rename Columns ---
 st.subheader('Rename Columns')
@@ -161,11 +194,15 @@ if df.shape[1] > 0:
             st.warning("Please select at least one column to delete.")
 else:
     st.info('No columns available to delete.')
+
 # --- Replace values globally in a column ---
 st.markdown("**Replace all occurrences of a value in a column**")
-col_for_replace = st.selectbox("Column for value replacement:", df.columns)
+col_for_replace = st.selectbox("Column for value replacement:", df.columns, key="replace_col_sel")
 unique_vals = df[col_for_replace].unique()
-old_val = st.selectbox('Old value to replace:', unique_vals)
+try:
+    old_val = st.selectbox('Old value to replace:', unique_vals, key="replace_old_val_sel")
+except Exception:
+    old_val = unique_vals[0] if len(unique_vals) else None
 new_val = st.text_input('Replacement:', value=str(old_val))
 if st.button('Replace value globally'):
     df = replace_in_column(df, col_for_replace, old_val, new_val)
@@ -177,15 +214,18 @@ st.subheader('Validate Numeric Ranges')
 num_cols = [c for c in df.columns if np.issubdtype(df[c].dtype, np.number)]
 if num_cols:
     col_to_validate = st.selectbox('Select numeric column for range validation:', num_cols)
-    col_min, col_max = float(df[col_to_validate].min()), float(df[col_to_validate].max())
-    vmin = st.number_input('Min valid value:', value=col_min)
-    vmax = st.number_input('Max valid value:', value=col_max)
-    if st.button('Apply Range Validation'):
-        before = df.shape[0]
-        df = column_range_validation(df, col_to_validate, vmin, vmax)
-        after = df.shape[0]
-        st.session_state['df'] = df
-        st.success(f"Filtered out {before-after} rows outside ({vmin}, {vmax})")
+    if df[col_to_validate].dropna().shape[0] > 0:
+        col_min, col_max = float(df[col_to_validate].min()), float(df[col_to_validate].max())
+        vmin = st.number_input('Min valid value:', value=col_min)
+        vmax = st.number_input('Max valid value:', value=col_max)
+        if st.button('Apply Range Validation'):
+            before = df.shape[0]
+            df = column_range_validation(df, col_to_validate, vmin, vmax)
+            after = df.shape[0]
+            st.session_state['df'] = df
+            st.success(f"Filtered out {before-after} rows outside ({vmin}, {vmax})")
+    else:
+        st.warning("All values are NA in this column.")
 
 # --- Duplicate Handling ---
 st.subheader('Duplicate Detection')
@@ -195,6 +235,7 @@ if d_count > 0 and st.button('Remove all duplicate rows'):
     df = df.drop_duplicates()
     st.session_state['df'] = df
     st.success('Removed duplicate rows!')
+    st.experimental_rerun()
 
 # --- Missing Value Handling (Batch) ---
 st.subheader('Missing Value Analysis and Handling')
@@ -213,10 +254,14 @@ if missing_cols:
         "Fill with median (numeric)",
         "KNN Imputer (numeric only)",
         "Fill with constant"
-    ])
+    ], key="missing_strategy_radio")
+    const_val = None
     if mv_choice == "Fill with constant":
         const_val = st.text_input('Constant value to fill:', value="0")
-    if st.button('Apply Missing Value Handling to Selected Columns'):
+    k = None
+    if mv_choice == "KNN Imputer (numeric only)":
+        k = st.number_input('Set K for KNN:', 1, 20, 3)
+    if st.button('Apply Missing Value Handling to Selected Columns', key="apply_mv_handling"):
         if mv_choice == "Delete rows with missing (any selected column)":
             before = df.shape[0]
             df = df.dropna(subset=batch_mv_cols)
@@ -238,7 +283,6 @@ if missing_cols:
         elif mv_choice == "KNN Imputer (numeric only)":
             numeric_batch = [c for c in batch_mv_cols if pd.api.types.is_numeric_dtype(df[c])]
             if numeric_batch:
-                k = st.number_input('Set K for KNN:', 1, 20, 3)
                 imputer = KNNImputer(n_neighbors=int(k))
                 df[numeric_batch] = imputer.fit_transform(df[numeric_batch])
                 st.success(f"KNN-imputed selected numeric columns (k={k}).")
@@ -249,6 +293,7 @@ if missing_cols:
                 df[c] = df[c].fillna(const_val)
             st.success(f"Filled NAs with constant '{const_val}' for selected columns.")
         st.session_state['df'] = df
+        st.experimental_rerun()
 else:
     st.success("No columns have missing values.")
 
@@ -265,6 +310,7 @@ if potential_dates:
         after = df[col_date].isna().sum()
         st.session_state['df'] = df
         st.success(f"Converted. Nulls before: {before}, Nulls after: {after}")
+        st.experimental_rerun()
 else:
     st.info('No obvious date columns detected.')
 
@@ -279,12 +325,11 @@ if num_cols:
     st.write(f"Total outliers: {total_outliers}")
 
     batch_outlier_cols = st.multiselect("Select numeric columns to handle outliers (batch):", num_cols)
-    out_action = st.radio('How to handle outliers in selected columns?', ['Keep', 'Delete', 'Cap'])
+    out_action = st.radio('How to handle outliers in selected columns?', ['Keep', 'Delete', 'Cap'], key="outlier_radio")
     if st.button('Apply Outlier Handling to Selected Columns'):
         if not batch_outlier_cols:
             st.warning("Please select at least one column.")
         elif out_action == 'Delete':
-            # Delete any row with outlier in any selected col
             idxs_to_del = []
             for col in batch_outlier_cols:
                 idxs_to_del.extend(outlier_info[col])
@@ -292,13 +337,16 @@ if num_cols:
             before = df.shape[0]
             df = df.drop(index=idxs_to_del)
             st.success(f"Deleted {before - df.shape[0]} rows with outliers in selected columns.")
+            st.session_state['df'] = df
+            st.experimental_rerun()
         elif out_action == 'Cap':
             for col in batch_outlier_cols:
                 df = cap_outliers(df, col)
             st.success(f"Capped outliers in selected columns.")
+            st.session_state['df'] = df
+            st.experimental_rerun()
         elif out_action == 'Keep':
             st.info("No changes made. Outliers kept.")
-        st.session_state['df'] = df
 
 # --- Normalization / Transformation ---
 st.subheader('Data Normalization/Transformer')
